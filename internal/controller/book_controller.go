@@ -44,6 +44,8 @@ var (
 // +kubebuilder:rbac:groups=store.crd.com,resources=books,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=store.crd.com,resources=books/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=store.crd.com,resources=books/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -69,8 +71,19 @@ func (r *BookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		logger.Error(err, "unable to list child Deployments")
 		return ctrl.Result{}, err
 	}
-	logger.WithValues("childDeploys", len(childDeploys.Items))
-	if len(childDeploys.Items) == 0 || !findDeploysOwnedByCustomCrd(&childDeploys) {
+
+	if len(childDeploys.Items) > 0 {
+		bookCR.Status.AvailableReplicas = childDeploys.Items[0].Status.AvailableReplicas
+	} else {
+		bookCR.Status.AvailableReplicas = 0
+	}
+
+	if err := r.Status().Update(ctx, &bookCR); err != nil {
+		logger.Error(err, "unable to update Book")
+		return ctrl.Result{}, err
+	}
+
+	if len(childDeploys.Items) == 0 {
 		deploy := newDeployment(&bookCR)
 		err := r.Create(ctx, deploy)
 		if err != nil {
@@ -79,7 +92,7 @@ func (r *BookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	if bookCR.Spec.Replicas != nil && *bookCR.Spec.Replicas != *childDeploys.Items[0].Spec.Replicas {
+	if bookCR.Spec.Replicas != nil && len(childDeploys.Items) != 0 && *bookCR.Spec.Replicas != *childDeploys.Items[0].Spec.Replicas {
 		deploy := newDeployment(&bookCR)
 		err := r.Update(ctx, deploy)
 		if err != nil {
@@ -94,8 +107,7 @@ func (r *BookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
-	logger.WithValues("childSvcs ", len(childSvcs.Items))
-	if len(childSvcs.Items) == 0 || !findServicesOwnedByCustomCrd(&childSvcs) {
+	if len(childSvcs.Items) == 0 {
 		svc := newService(&bookCR)
 		err := r.Create(ctx, svc)
 		if err != nil {
@@ -105,32 +117,6 @@ func (r *BookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// findDeploysOwnedByCustomCrd
-func findDeploysOwnedByCustomCrd(deploys *appsv1.DeploymentList) bool {
-	for i := 0; i < len(deploys.Items); i++ {
-		ownRefs := deploys.Items[0].GetOwnerReferences()
-		for j := 0; j < len(ownRefs); j++ {
-			if (ownRefs[j].APIVersion == storev1.GroupVersion.String()) && (ownRefs[j].Kind == "Book") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// findServicesOwnedByCustomCrd
-func findServicesOwnedByCustomCrd(services *corev1.ServiceList) bool {
-	for i := 0; i < len(services.Items); i++ {
-		ownRefs := services.Items[0].GetOwnerReferences()
-		for j := 0; j < len(ownRefs); j++ {
-			if (ownRefs[j].APIVersion == storev1.GroupVersion.String()) && (ownRefs[j].Kind == "Book") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // newDeployment creates a new Deployment for a book resource. It also sets
@@ -143,7 +129,7 @@ func newDeployment(book *storev1.Book) *appsv1.Deployment {
 	}
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      book.Spec.DeploymentName,
+			Name:      book.Spec.DeploymentName + "-dep",
 			Namespace: book.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(book, storev1.GroupVersion.WithKind("Book")),

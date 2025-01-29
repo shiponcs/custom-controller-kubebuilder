@@ -28,7 +28,7 @@ import (
 type BookSpec struct {
 	DeploymentName string           `json:"deploymentName"`
 	Replicas       *int32           `json:"replicas"`
-	Container      corev1.Container `json:"container"`
+	Container      corev1.Container `json:"container,required"`
 }
 
 // BookStatus defines the observed state of Book.
